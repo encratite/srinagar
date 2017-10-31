@@ -181,6 +181,17 @@ int on_connect(int server_fd, int epoll_fd)
 			perror("epoll_ctl (client)");
 			return -1;
 		}
+		char host_buffer[NI_MAXHOST];
+		char port_buffer[NI_MAXSERV];
+		status = getnameinfo(&client_address, sizeof(client_address), host_buffer, sizeof(host_buffer), port_buffer, sizeof(port_buffer), NI_NUMERICHOST | NI_NUMERICSERV);
+		if (status == 0)
+		{
+			printf("New connection from %s:%s\n", host_buffer, port_buffer);
+		}
+		else
+		{
+			perror("getnameinfo");
+		}
 	}
 	return 0;
 }
