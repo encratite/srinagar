@@ -21,8 +21,8 @@ int main(int argc, char **argv)
 		printf("%s <address to bind> <port>\n", argv[0]);
 		return 1;
 	}
-	const char * address = argv[1];
-	const char * port = argv[2];
+	const char *address = argv[1];
+	const char *port = argv[2];
 	int status = run_server(address, port);
 	return status;
 }
@@ -111,92 +111,23 @@ int process_epoll_event(int server_fd, int epoll_fd, struct epoll_event *events)
 	for (int i = 0; i < ready_count; i++)
 	{
 		struct epoll_event *event = events + i;
+		int event_fd = event->data.fd;
+		status = 0;
 		if (event->events & EPOLLERR || event->events & EPOLLHUP || !(event->events & EPOLLIN))
 		{
-			close(event->data.fd);
+			close(event_fd);
 		}
-		else if (event->data.fd == server_fd)
+		else if (event_fd == server_fd)
 		{
-			while (1)
-			{
-				struct sockaddr client_address;
-				socklen_t client_address_size = sizeof(client_address);
-				int client_fd = accept(server_fd, &client_address, &client_address_size);
-				if (client_fd == -1)
-				{
-					if (errno == EAGAIN || errno == EWOULDBLOCK)
-					{
-						break;
-					}
-					perror("accept");
-					return -1;
-				}
-				status = enable_non_blocking_mode(client_fd);
-				if (status != 0)
-				{
-					return -1;
-				}
-				struct epoll_event new_event;
-				new_event.data.fd = client_fd;
-				new_event.events = EPOLLIN | EPOLLET;
-				status = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &new_event);
-				if (status == -1)
-				{
-					perror("epoll_ctl (client)");
-					return -1;
-				}
-			}
+			status = on_connect(server_fd, epoll_fd);
 		}
 		else
 		{
-			char buffer[buffer_size];
-			memset(buffer, 0, sizeof(buffer));
-			size_t bytes_read = recv(event->data.fd, buffer, sizeof(buffer), MSG_PEEK);
-			if (bytes_read == 0)
-			{
-				close(event->data.fd);
-			}
-			else if (bytes_read == sizeof(buffer))
-			{
-				puts("Overflow");
-				close(event->data.fd);
-			}
-			else if (bytes_read == -1)
-			{
-				perror("recv");
-				close(event->data.fd);
-				continue;
-			}
-			else
-			{
-				regex_t regex;
-				status = regcomp(&regex, "^GET (.+?) HTTP/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
-				if (status != 0)
-				{
-					char error_message[buffer_size];
-					regerror(status, &regex, error_message, sizeof(error_message));
-					fprintf(stderr, "regcomp: %s", error_message);
-					return -1;
-				}
-				size_t group_count = 2;
-				regmatch_t matches[group_count];
-				status = regexec(&regex, buffer, group_count, matches, 0);
-				if (status == 0)
-				{
-					char path[buffer_size];
-					memset(path, 0, sizeof(path));
-					regmatch_t *match = matches + 1;
-					memcpy(path, buffer + match->rm_so, match->rm_eo - match->rm_so);
-					recv(event->data.fd, buffer, sizeof(buffer), 0);
-					char header[buffer_size];
-					char *body = path;
-					size_t body_size = strlen(path);
-					int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", body_size);
-					send(event->data.fd, header, header_size, 0);
-					send(event->data.fd, body, body_size, 0);
-				}
-				regfree(&regex);
-			}
+			status = on_receive(event_fd);
+		}
+		if (status != 0)
+		{
+			return -1;
 		}
 	}
 	return 0;
@@ -218,4 +149,88 @@ int enable_non_blocking_mode(int server_fd)
 		return -1;
 	}
 	return 0;
+}
+
+int on_connect(int server_fd, int epoll_fd)
+{
+	while (1)
+	{
+		struct sockaddr client_address;
+		socklen_t client_address_size = sizeof(client_address);
+		int client_fd = accept(server_fd, &client_address, &client_address_size);
+		if (client_fd == -1)
+		{
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+			{
+				break;
+			}
+			perror("accept");
+			return -1;
+		}
+		int status = enable_non_blocking_mode(client_fd);
+		if (status != 0)
+		{
+			return -1;
+		}
+		struct epoll_event new_event;
+		new_event.data.fd = client_fd;
+		new_event.events = EPOLLIN | EPOLLET;
+		status = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &new_event);
+		if (status == -1)
+		{
+			perror("epoll_ctl (client)");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int on_receive(int client_fd)
+{
+	char buffer[buffer_size];
+	memset(buffer, 0, sizeof(buffer));
+	size_t bytes_read = recv(client_fd, buffer, sizeof(buffer), MSG_PEEK);
+	if (bytes_read == 0)
+	{
+		close(client_fd);
+	}
+	else if (bytes_read == sizeof(buffer))
+	{
+		close(client_fd);
+	}
+	else if (bytes_read == -1)
+	{
+		perror("recv");
+		close(client_fd);
+	}
+	else
+	{
+		regex_t regex;
+		int status = regcomp(&regex, "^GET (.+?) HTTP/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
+		if (status != 0)
+		{
+			char error_message[buffer_size];
+			regerror(status, &regex, error_message, sizeof(error_message));
+			fprintf(stderr, "regcomp: %s", error_message);
+			return -1;
+		}
+		size_t group_count = 2;
+		regmatch_t matches[group_count];
+		status = regexec(&regex, buffer, group_count, matches, 0);
+		if (status == 0)
+		{
+			char path[buffer_size];
+			memset(path, 0, sizeof(path));
+			regmatch_t *match = matches + 1;
+			memcpy(path, buffer + match->rm_so, match->rm_eo - match->rm_so);
+			recv(client_fd, buffer, sizeof(buffer), 0);
+			char header[buffer_size];
+			char *body = path;
+			size_t body_size = strlen(path);
+			int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", body_size);
+			send(client_fd, header, header_size, 0);
+			send(client_fd, body, body_size, 0);
+		}
+		regfree(&regex);
+	}
 }
