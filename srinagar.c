@@ -1,19 +1,17 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <regex.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-enum
-{
-	maximum_events = 64,
-	buffer_size = 4096
-};
+#include "srinagar.h"
 
 int main(int argc, char **argv)
 {
@@ -56,7 +54,7 @@ int run_server(const char *address, const char *port)
 		perror("bind");
 		return -1;
 	}
-	status = enable_non_blocking_mode(server_fd)
+	status = enable_non_blocking_mode(server_fd);
 	if (status == -1)
 	{
 		return -1;
@@ -82,7 +80,7 @@ int run_server(const char *address, const char *port)
 		perror("epoll_ctl (server)");
 		return -1;
 	}
-	struct epoll_event *events = calloc(maximum_events, sizeof(epoll_event));
+	struct epoll_event *events = calloc(maximum_events, sizeof(struct epoll_event));
 	while (1)
 	{
 		status = process_epoll_event(server_fd, epoll_fd, events);
@@ -145,7 +143,7 @@ int process_epoll_event(int server_fd, int epoll_fd, struct epoll_event *events)
 		{
 			char buffer[buffer_size];
 			memset(buffer, 0, sizeof(buffer));
-			size_t bytes_read = recv(event.data.fd, buffer, sizeof(buffer), MSG_PEEK);
+			size_t bytes_read = recv(event->data.fd, buffer, sizeof(buffer), MSG_PEEK);
 			if (bytes_read == 0)
 			{
 				close(event->data.fd);
@@ -179,13 +177,13 @@ int process_epoll_event(int server_fd, int epoll_fd, struct epoll_event *events)
 					char path[buffer_size];
 					memset(path, 0, sizeof(path));
 					memcpy(path, buffer + match.rm_so, match.rm_eo - match.rm_so);
-					recv(event.data.fd, buffer, sizeof(buffer), 0);
+					recv(event->data.fd, buffer, sizeof(buffer), 0);
 					char header[buffer_size];
 					char *body = path;
 					size_t body_size = strlen(path);
 					int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", body_size);
-					send(event.data.fd, header, header_size, 0);
-					send(event.data.fd, body, body_size, 0);
+					send(event->data.fd, header, header_size, 0);
+					send(event->data.fd, body, body_size, 0);
 				}
 				regfree(&regex);
 			}
