@@ -47,6 +47,13 @@ int run_server(const char *address, const char *port)
 		freeaddrinfo(address_info);
 		return -1;
 	}
+	int enable = 1;
+	status = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
+	if (status != 0)
+	{
+		perror("setsockopt");
+		return -1;
+	}
 	status = bind(server_fd, address_info->ai_addr, address_info->ai_addrlen);
 	freeaddrinfo(address_info);
 	if (status != 0)
@@ -80,6 +87,7 @@ int run_server(const char *address, const char *port)
 		perror("epoll_ctl (server)");
 		return -1;
 	}
+	printf("Running HTTP server on %s:%s\n", address, port);
 	struct epoll_event *events = calloc(maximum_events, sizeof(struct epoll_event));
 	while (1)
 	{
@@ -163,20 +171,22 @@ int process_epoll_event(int server_fd, int epoll_fd, struct epoll_event *events)
 			{
 				regex_t regex;
 				status = regcomp(&regex, "^GET (.+?) HTTP/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
-				if (regcomp != 0)
+				if (status != 0)
 				{
 					char error_message[buffer_size];
 					regerror(status, &regex, error_message, sizeof(error_message));
-					fprintf(stderr, "regcomp: %s", regerror);
+					fprintf(stderr, "regcomp: %s", error_message);
 					return -1;
 				}
-				regmatch_t match;
-				status = regexec(&regex, buffer, 1, &match, 0);
+				size_t group_count = 2;
+				regmatch_t matches[group_count];
+				status = regexec(&regex, buffer, group_count, matches, 0);
 				if (status == 0)
 				{
 					char path[buffer_size];
 					memset(path, 0, sizeof(path));
-					memcpy(path, buffer + match.rm_so, match.rm_eo - match.rm_so);
+					regmatch_t *match = matches + 1;
+					memcpy(path, buffer + match->rm_so, match->rm_eo - match->rm_so);
 					recv(event->data.fd, buffer, sizeof(buffer), 0);
 					char header[buffer_size];
 					char *body = path;
