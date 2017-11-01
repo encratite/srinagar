@@ -223,7 +223,6 @@ int on_receive(int client_fd)
 	else
 	{
 		regex_t regex;
-		// int status = regcomp(&regex, "^GET ((?:\\/[a-zA-Z0-9.\\-_~!$&'()*},;=:@]*)+) HTTP\\/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
 		int status = regcomp(&regex, "^GET (/[/a-zA-Z0-9.\\-_~!$&'()*},;=:@]*+) HTTP/1\\.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
 		if (status != 0)
 		{
