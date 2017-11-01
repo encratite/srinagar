@@ -275,7 +275,7 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	}
 	char full_path[PATH_MAX + buffer_size];
 	snprintf(full_path, sizeof(full_path), "%s/data%s", working_directory, request_path);
-	printf("Path: %s\n", full_path);
+	printf("Client requested %s\n", request_path);
 	int file_fd = open(full_path, O_RDONLY | O_NONBLOCK);
 	if (file_fd == -1)
 	{
@@ -294,7 +294,7 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	char header[buffer_size];
 	int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", file_stat.st_size);
 	size_t send_status = send(client_fd, header, header_size, 0);
-	if (send_status != EAGAIN)
+	if (send_status == -1)
 	{
 		perror("send");
 		close(client_fd);
@@ -302,7 +302,7 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	}
 	off_t offset = 0;
 	send_status = sendfile(client_fd, file_fd, &offset, file_stat.st_size);
-	if (send_status != EAGAIN)
+	if (send_status == -1)
 	{
 		perror("sendfile");
 		close(client_fd);
