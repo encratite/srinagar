@@ -4,10 +4,13 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/limits.h>
 #include <netdb.h>
 #include <regex.h>
 #include <sys/epoll.h>
+#include <sys/sendfile.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -24,6 +27,7 @@ int main(int argc, char **argv)
 	const char *address = argv[1];
 	const char *port = argv[2];
 	int status = run_server(address, port);
+	puts("");
 	return status;
 }
 
@@ -203,10 +207,12 @@ int on_receive(int client_fd)
 	size_t bytes_read = recv(client_fd, buffer, sizeof(buffer), MSG_PEEK);
 	if (bytes_read == 0)
 	{
+		puts("Client disconnected");
 		close(client_fd);
 	}
 	else if (bytes_read == sizeof(buffer))
 	{
+		puts("Request too large");
 		close(client_fd);
 	}
 	else if (bytes_read == -1)
@@ -217,12 +223,14 @@ int on_receive(int client_fd)
 	else
 	{
 		regex_t regex;
-		int status = regcomp(&regex, "^GET (.+?) HTTP/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
+		// int status = regcomp(&regex, "^GET ((?:\\/[a-zA-Z0-9.\\-_~!$&'()*},;=:@]*)+) HTTP\\/1.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
+		int status = regcomp(&regex, "^GET (/[/a-zA-Z0-9.\\-_~!$&'()*},;=:@]*+) HTTP/1\\.1\r\n.+?\r\n\r\n$", REG_EXTENDED);
 		if (status != 0)
 		{
 			char error_message[buffer_size];
 			regerror(status, &regex, error_message, sizeof(error_message));
 			fprintf(stderr, "regcomp: %s", error_message);
+			close(client_fd);
 			return -1;
 		}
 		size_t group_count = 2;
@@ -230,18 +238,75 @@ int on_receive(int client_fd)
 		status = regexec(&regex, buffer, group_count, matches, 0);
 		if (status == 0)
 		{
-			char path[buffer_size];
-			memset(path, 0, sizeof(path));
-			regmatch_t *match = matches + 1;
-			memcpy(path, buffer + match->rm_so, match->rm_eo - match->rm_so);
-			recv(client_fd, buffer, sizeof(buffer), 0);
-			char header[buffer_size];
-			char *body = path;
-			size_t body_size = strlen(path);
-			int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", body_size);
-			send(client_fd, header, header_size, 0);
-			send(client_fd, body, body_size, 0);
+			status = process_request(client_fd, buffer, matches);
+		}
+		else
+		{
+			puts("Invalid request");
+			status = 0;
+			close(client_fd);
 		}
 		regfree(&regex);
+		return status;
 	}
+	return 0;
+}
+
+int process_request(int client_fd, char *buffer, regmatch_t *matches)
+{
+	char request_path[buffer_size];
+	memset(request_path, 0, sizeof(request_path));
+	regmatch_t *match = matches + 1;
+	memcpy(request_path, buffer + match->rm_so, match->rm_eo - match->rm_so);
+	recv(client_fd, buffer, sizeof(buffer), 0);
+	if (strstr(request_path, "/..") != NULL)
+	{
+		printf("Illicit request: %s\n", request_path);
+		close(client_fd);
+		return 0;
+	}
+	char working_directory[PATH_MAX];
+	char *getwd_buffer = getcwd(working_directory, sizeof(working_directory));
+	if (getwd_buffer == NULL)
+	{
+		perror("getcwd");
+		close(client_fd);
+		return -1;
+	}
+	char full_path[PATH_MAX + buffer_size];
+	snprintf(full_path, sizeof(full_path), "%s/data%s", working_directory, request_path);
+	printf("Path: %s\n", full_path);
+	int file_fd = open(full_path, O_RDONLY | O_NONBLOCK);
+	if (file_fd == -1)
+	{
+		perror("open");
+		close(client_fd);
+		return 0;
+	}
+	struct stat file_stat;
+	int status = fstat(file_fd, &file_stat);
+	if (status == -1)
+	{
+		perror("fstat");
+		close(client_fd);
+		return 0;
+	}
+	char header[buffer_size];
+	int header_size = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", file_stat.st_size);
+	size_t send_status = send(client_fd, header, header_size, 0);
+	if (send_status != EAGAIN)
+	{
+		perror("send");
+		close(client_fd);
+		return 0;
+	}
+	off_t offset = 0;
+	send_status = sendfile(client_fd, file_fd, &offset, file_stat.st_size);
+	if (send_status != EAGAIN)
+	{
+		perror("sendfile");
+		close(client_fd);
+		return 0;
+	}
+	return 0;
 }
