@@ -287,6 +287,14 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	if (status == -1)
 	{
 		perror("fstat");
+		close(file_fd);
+		close(client_fd);
+		return 0;
+	}
+	if (!S_ISREG(file_stat.st_mode))		
+	{
+		printf("Path requested by user is not a file: %s\n", request_path);
+		close(file_fd);
 		close(client_fd);
 		return 0;
 	}
@@ -296,6 +304,7 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	if (send_status == -1)
 	{
 		perror("send");
+		close(file_fd);
 		close(client_fd);
 		return 0;
 	}
@@ -304,6 +313,7 @@ int process_request(int client_fd, char *buffer, regmatch_t *matches)
 	if (send_status == -1)
 	{
 		perror("sendfile");
+		close(file_fd);
 		close(client_fd);
 		return 0;
 	}
